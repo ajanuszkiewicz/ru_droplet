@@ -24,12 +24,17 @@ stored in the macOS Keychain, never in the script or in this repo.
    SERVER_URL=https://your-server/rutorrent/php/addtorrent.php
    KEYCHAIN_ACCOUNT=<username>
    KEYCHAIN_SERVICE=rutorrent-droplet
+   DELETE_AFTER_ADD=true
    EOF
    chmod 600 ~/.config/rutorrent-droplet/config
    ```
 
    `SERVER_URL` should point at `php/addtorrent.php` under your ruTorrent
    install (e.g. `https://seed.example.com/rutorrent/php/addtorrent.php`).
+
+   `DELETE_AFTER_ADD` is optional (default: off). When set to `true`, each
+   dropped `.torrent` file is deleted after it's confirmed added — files that
+   fail (auth error, rejected by server, etc.) are left in place.
 
 3. **Build the app**:
 

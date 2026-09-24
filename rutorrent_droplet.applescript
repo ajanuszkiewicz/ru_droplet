@@ -8,6 +8,7 @@
 --      SERVER_URL=https://your-server/rutorrent/php/addtorrent.php
 --      KEYCHAIN_ACCOUNT=<username>
 --      KEYCHAIN_SERVICE=rutorrent-droplet
+--      DELETE_AFTER_ADD=true   (optional; deletes the .torrent file on success)
 --   3. Build: osacompile -o "ruTorrent Droplet.app" rutorrent_droplet.applescript
 
 property configPath : "~/.config/rutorrent-droplet/config"
@@ -17,6 +18,7 @@ on open theFiles
 	set serverURL to configValue(configValues, "SERVER_URL")
 	set keychainAccount to configValue(configValues, "KEYCHAIN_ACCOUNT")
 	set keychainService to configValue(configValues, "KEYCHAIN_SERVICE")
+	set deleteAfterAdd to (configValue(configValues, "DELETE_AFTER_ADD") is "true")
 
 	if serverURL is "" or keychainAccount is "" or keychainService is "" then
 		display notification "Missing config at " & configPath with title "ruTorrent Droplet"
@@ -53,6 +55,11 @@ on open theFiles
 					set end of failNames to (fileName & " (rejected by server)")
 				else if httpCode starts with "2" or httpCode starts with "3" then
 					set end of successNames to fileName
+					if deleteAfterAdd then
+						try
+							do shell script "rm -f " & quoted form of thePath
+						end try
+					end if
 				else
 					set end of failNames to (fileName & " (HTTP " & httpCode & ")")
 				end if
