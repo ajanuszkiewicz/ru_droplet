@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=ruTorrent Droplet
+Comment=Upload .torrent files to a ruTorrent server
+Exec=rutorrent-droplet %F
+Icon=rutorrent-droplet
+Terminal=false
+Categories=Network;FileTransfer;P2P;
+MimeType=application/x-bittorrent;
+NoDisplay=false

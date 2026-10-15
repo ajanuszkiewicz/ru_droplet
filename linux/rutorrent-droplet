@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# ruTorrent Droplet (Linux)
+# Upload .torrent files to a ruTorrent server. Run it with file paths as
+# arguments, or drop files onto its launcher (see linux/install.sh).
+#
+# Setup (see README.md for full details):
+#   1. Store your password in the desktop keyring (GNOME Keyring / KWallet):
+#      secret-tool store --label="ruTorrent Droplet" service rutorrent-droplet account "<username>"
+#   2. Create ~/.config/rutorrent-droplet/config with:
+#      SERVER_URL=https://your-server/rutorrent/php/addtorrent.php
+#      KEYCHAIN_ACCOUNT=<username>
+#      KEYCHAIN_SERVICE=rutorrent-droplet
+#      DELETE_AFTER_ADD=true   (optional; deletes the .torrent file on success)
+
+set -u
+
+TITLE="ruTorrent Droplet"
+CONFIG_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/rutorrent-droplet/config"
+
+notify() {
+	# notify <summary> [body]
+	if command -v notify-send >/dev/null 2>&1; then
+		notify-send --app-name="$TITLE" --icon=rutorrent-droplet "$TITLE: $1" "${2:-}"
+	fi
+	echo "$1${2:+ — $2}" >&2
+}
+
+config_value() {
+	# Same format as the macOS version: KEY=VALUE lines, '#' comments.
+	[ -r "$CONFIG_PATH" ] || return 0
+	grep -v '^#' "$CONFIG_PATH" | grep -m1 "^$1=" | cut -d= -f2- | tr -d '\r'
+}
+
+SERVER_URL="$(config_value SERVER_URL)"
+KEYCHAIN_ACCOUNT="$(config_value KEYCHAIN_ACCOUNT)"
+KEYCHAIN_SERVICE="$(config_value KEYCHAIN_SERVICE)"
+DELETE_AFTER_ADD="$(config_value DELETE_AFTER_ADD)"
+
+if [ -z "$SERVER_URL" ] || [ -z "$KEYCHAIN_ACCOUNT" ] || [ -z "$KEYCHAIN_SERVICE" ]; then
+	notify "Missing config at $CONFIG_PATH"
+	exit 1
+fi
+
+if ! command -v secret-tool >/dev/null 2>&1; then
+	notify "secret-tool not found" "Install libsecret-tools (Debian/Ubuntu) or libsecret (Fedora/Arch)"
+	exit 1
+fi
+
+PASSWORD="$(secret-tool lookup service "$KEYCHAIN_SERVICE" account "$KEYCHAIN_ACCOUNT")"
+if [ -z "$PASSWORD" ]; then
+	notify "No password in keyring" "service=$KEYCHAIN_SERVICE account=$KEYCHAIN_ACCOUNT"
+	exit 1
+fi
+
+# Pass credentials to curl on stdin (curl -K -) so they never appear in the
+# process list. Escape backslashes and double quotes for curl's config syntax.
+curl_user="$KEYCHAIN_ACCOUNT:$PASSWORD"
+curl_user="${curl_user//\\/\\\\}"
+curl_user="${curl_user//\"/\\\"}"
+
+HEADER_FILE="$(mktemp)"
+ERR_FILE="$(mktemp)"
+trap 'rm -f "$HEADER_FILE" "$ERR_FILE"' EXIT
+
+success_names=()
+fail_names=()
+
+for path in "$@"; do
+	# Launchers may pass file:// URIs instead of paths.
+	case "$path" in
+		file://*)
+			path="${path#file://}"
+			path="$(printf '%b' "${path//%/\\x}")"
+			;;
+	esac
+
+	shopt -s nocasematch
+	[[ "$path" == *.torrent ]] || { shopt -u nocasematch; continue; }
+	shopt -u nocasematch
+
+	name="$(basename "$path")"
+	: >"$HEADER_FILE"
+
+	# Quote the filename so curl -F doesn't choke on commas or semicolons.
+	form_path="${path//\\/\\\\}"
+	form_path="${form_path//\"/\\\"}"
+
+	if ! http_code="$(printf 'user = "%s"\n' "$curl_user" | curl -s -S -K - \
+		-D "$HEADER_FILE" -o /dev/null -w '%{http_code}' \
+		-F "torrent_file[]=@\"$form_path\"" "$SERVER_URL" 2>"$ERR_FILE")"; then
+		fail_names+=("$name ($(tail -n1 "$ERR_FILE"))")
+		continue
+	fi
+
+	if [ "$http_code" = "401" ]; then
+		fail_names+=("$name (auth failed)")
+	elif grep -q "FailedFile" "$HEADER_FILE"; then
+		fail_names+=("$name (rejected by server)")
+	elif [[ "$http_code" == 2* || "$http_code" == 3* ]]; then
+		success_names+=("$name")
+		if [ "$DELETE_AFTER_ADD" = "true" ]; then
+			rm -f -- "$path"
+		fi
+	else
+		fail_names+=("$name (HTTP $http_code)")
+	fi
+done
+
+join() {
+	local out="$1"
+	shift
+	for item in "$@"; do out+=", $item"; done
+	echo "$out"
+}
+
+n_ok=${#success_names[@]}
+n_fail=${#fail_names[@]}
+
+if [ "$n_ok" -gt 0 ] && [ "$n_fail" -eq 0 ]; then
+	notify "$n_ok torrent(s) added"
+elif [ "$n_ok" -gt 0 ]; then
+	notify "$n_ok added, $n_fail failed" "$(join "${fail_names[@]}")"
+	exit 1
+elif [ "$n_fail" -gt 0 ]; then
+	notify "Failed" "$(join "${fail_names[@]}")"
+	exit 1
+else
+	notify "No .torrent files were given"
+	exit 1
+fi
